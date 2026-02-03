@@ -10,28 +10,29 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - [...](asc_slot://start-slot-1)uses: actions/checkout@v4
 
-    # 1. 设置 JDK 8
+    # 1. 自动配置 JDK 8
     - name: Set up JDK 8
       uses: actions/setup-java@v4
       with:
         java-version: '8'
         distribution: 'temurin'
 
-    # 2. Action 指定 NDK r14b (AGP 2.x 专用)
-    - uses: ncipollo/android-ndk-action@v1
+    # 2. 使用 Action 自动安装 NDK r14b
+    # [...](asc_slot://start-slot-3)这一步会自动下载、解压并设置 ANDROID_NDK_HOME 环境变量
+    - uses: nttld/setup-ndk@v1
       with:
         ndk-version: r14b
 
-    # 3. Action 指定 SDK Build-Tools 25.0.2
+    # 3. 使用 Action 自动安装 SDK Build-Tools 25.0.2
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
         packages: 'build-tools;25.0.2 platforms;android-25'
 
-    # 4. 注入镜像配置 (优先 Google/Central，Aliyun 仅作备用)
-    # 针对 Gradle 3.5，必须使用 maven.google.com 这种写法
+    # 4. 注入优化的镜像配置 (Google First -> Aliyun Fallback)
+    # 注意：Gradle 3.5 必须用 maven.google.com 全写，不支持 google() 简写
     - name: Inject Repositories
       run: |
         cat > init.gradle <<EOF
