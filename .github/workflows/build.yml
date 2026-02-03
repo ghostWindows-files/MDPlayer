@@ -12,11 +12,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # 1. 设置 JDK 8
-    - name: Set up JDK 8
+    # 1. 【第一步】先设置 Java 17
+    # 目的：为了让 sdkmanager 能够运行，否则会报 "Requires JDK 17" 错误
+    - name: Set up JDK 17 for SDK Manager
       uses: actions/setup-java@v4
       with:
-        java-version: '8'
+        java-version: '17'
         distribution: 'temurin'
 
     # 2. 安装 NDK r14b
@@ -24,15 +25,24 @@ jobs:
       with:
         ndk-version: r14b
 
-    # 3. 安装 SDK 组件 (补全 Google Repository)
-    # 关键修复：添加 'extras;google;m2repository' 和 'extras;android;m2repository'
-    # ConstraintLayout 1.0.0-alpha7 存在于 Google Repository 本地库中
+    # 3. 安装 Android SDK 组件
+    # 此时使用的是 Java 17，sdkmanager 可以正常工作
+    # 这里的 packages 包含了解决 CommonBusiness 报错所需的 Google 仓库
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
         packages: 'build-tools;25.0.2 platforms;android-25 extras;google;m2repository extras;android;m2repository'
 
-    # 4. 注入镜像 (保持不变，用于下载其他 jar 包)
+    # 4. 【第二步】切换回 Java 8
+    # 目的：SDK 装好了，现在把环境切回 Java 8，因为 Gradle 3.5 只能在 Java 8 下跑
+    # 后面的步骤（gradlew）会自动使用这个版本
+    - name: Set up JDK 8 for Project Build
+      uses: actions/setup-java@v4
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+
+    # 5. 注入镜像配置
     - name: Inject Repositories
       run: |
         cat > init.gradle <<EOF
@@ -58,7 +68,7 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # 5. 构建
+    # 6. 构建 APK
     - name: Build APK
       run: ./gradlew assembleDebug --init-script init.gradle --stacktrace
 
