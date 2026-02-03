@@ -10,29 +10,29 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - [...](asc_slot://start-slot-1)uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    # 1. 自动配置 JDK 8
+    # 1. 设置 JDK 8
     - name: Set up JDK 8
       uses: actions/setup-java@v4
       with:
         java-version: '8'
         distribution: 'temurin'
 
-    # 2. 使用 Action 自动安装 NDK r14b
-    # [...](asc_slot://start-slot-3)这一步会自动下载、解压并设置 ANDROID_NDK_HOME 环境变量
+    # 2. 安装 NDK r14b
     - uses: nttld/setup-ndk@v1
       with:
         ndk-version: r14b
 
-    # 3. 使用 Action 自动安装 SDK Build-Tools 25.0.2
+    # 3. 安装 SDK 组件 (补全 Google Repository)
+    # 关键修复：添加 'extras;google;m2repository' 和 'extras;android;m2repository'
+    # ConstraintLayout 1.0.0-alpha7 存在于 Google Repository 本地库中
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       with:
-        packages: 'build-tools;25.0.2 platforms;android-25'
+        packages: 'build-tools;25.0.2 platforms;android-25 extras;google;m2repository extras;android;m2repository'
 
-    # 4. 注入优化的镜像配置 (Google First -> Aliyun Fallback)
-    # 注意：Gradle 3.5 必须用 maven.google.com 全写，不支持 google() 简写
+    # 4. 注入镜像 (保持不变，用于下载其他 jar 包)
     - name: Inject Repositories
       run: |
         cat > init.gradle <<EOF
