@@ -9,14 +9,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # 使用较旧的 Ubuntu 只有助于兼容性，但关键在于下面的工具安装
+
+    env:
+      # 显式设置环境变量，强制 Gradle 使用我们下载的特定版本
+      ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk-r14b
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
 
     steps:
-    # 1. 检出代码
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 设置 JDK 8
     - name: Set up JDK 8
       uses: actions/setup-java@v4
       with:
@@ -24,174 +27,59 @@ jobs:
         distribution: 'temurin'
         cache: 'gradle'
 
-    # 3. 升级 Gradle Wrapper (3.5 -> 4.10.1)
-    - name: Upgrade Gradle Wrapper
+    # 1. 【精准环境配置】手动下载 NDK r14b (AGP 2.x 的最佳拍档)
+    # 这解决了 "NDK is missing a platforms directory" 的问题
+    - name: Install NDK r14b
       run: |
-        sed -i 's/gradle-.*-all.zip/gradle-4.10.1-all.zip/' gradle/wrapper/gradle-wrapper.properties
+        wget -q https://dl.google.com/android/repository/android-ndk-r14b-linux-x86_64.zip
+        unzip -q android-ndk-r14b-linux-x86_64.zip
+        echo "NDK path: $ANDROID_NDK_HOME"
 
-    # 4. 重写根目录 build.gradle (配置阿里云镜像 + AGP 3.3.2)
-    - name: Overwrite Root build.gradle
+    # 2. 【精准环境配置】安装旧版 SDK Build-Tools 25.0.2
+    # 这解决了 "failed to find Build Tools revision 25.0.2" 的问题
+    - name: Install SDK Build-Tools 25.0.2
       run: |
-        cat > build.gradle <<EOF
-        buildscript {
-            repositories {
-                maven { url 'https://maven.aliyun.com/repository/google' }
-                maven { url 'https://maven.aliyun.com/repository/public' }
-                maven { url "https://jitpack.io" }
-            }
-            dependencies {
-                classpath 'com.android.tools.build:gradle:3.3.2'
-            }
-        }
-        allprojects {
-            repositories {
-                maven { url 'https://maven.aliyun.com/repository/google' }
-                maven { url 'https://maven.aliyun.com/repository/public' }
-                maven { url "https://jitpack.io" }
-            }
-        }
-        task clean(type: Delete) {
-            delete rootProject.buildDir
-        }
-        EOF
-
-    # 5. 【修复】重写 ijkplayer-java/build.gradle
-    # 依据您提供的内容还原，但修正 SDK 版本为 28，并升级 compile -> implementation
-    - name: Overwrite ijkplayer build.gradle
-      run: |
-        cat > ijkplayer-java/build.gradle <<EOF
-        apply plugin: 'com.android.library'
-
-        android {
-            // 替换 rootProject.ext 为具体值
-            compileSdkVersion 28
-            buildToolsVersion "28.0.3"
-
-            defaultConfig {
-                minSdkVersion 16
-                targetSdkVersion 28
-            }
-
-            buildTypes {
-                release {
-                    minifyEnabled false
-                    proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-                }
-            }
-            
-            lintOptions { abortOnError false }
-
-            sourceSets.main {
-                jniLibs.srcDirs 'src/main/libs'
-                jni.srcDirs = [] // 防止自动生成 Android.mk
-            }
-        }
-
-        dependencies {
-            implementation fileTree(dir: 'libs', include: ['*.jar'])
-            implementation 'com.google.android.exoplayer:exoplayer:r1.5.7'
-        }
+        # 创建新的 SDK 目录以避免与环境自带的冲突
+        mkdir -p $ANDROID_HOME/cmdline-tools
+        # 下载 Command Line Tools
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-6858069_latest.zip
+        unzip -q commandlinetools-linux-6858069_latest.zip -d $ANDROID_HOME/cmdline-tools
+        # 移动目录以符合最新的目录结构要求 (latest/bin/sdkmanager)
+        mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
         
-        // 保留原有的插件加载逻辑 (虽然在CI里可能用不到，但为了保持逻辑一致性)
-        ext {
-            optionalPlugins = ['tools/gradle-mvn-push.gradle', 'tools/gradle-bintray-upload.gradle'];
-        }
-        ext.optionalPlugins.each{ value ->
-            def plugin_file = new File(rootProject.projectDir, value);
-            if (plugin_file.exists()) {
-                apply from: plugin_file
-            }
-        }
-        EOF
+        # 接受协议并安装指定的 Build-Tools 和 Platform
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;25.0.2" "platforms;android-25" "platform-tools"
 
-    # 6. 【修复】重写 app/build.gradle
-    # 保持上一轮的正确配置
-    - name: Overwrite App build.gradle
+    # 3. 【无侵入修复】创建 init.gradle 注入阿里云镜像
+    # 不修改你的项目源码，仅在构建时临时生效，解决依赖下载失败问题
+    - name: Create Init Script for Mirrors
       run: |
-        cat > app/build.gradle <<EOF
-        apply plugin: 'com.android.application'
-
-        android {
-            compileSdkVersion 28
-            buildToolsVersion "28.0.3"
-
-            defaultConfig {
-                minSdkVersion 16
-                targetSdkVersion 28
-                versionCode 1
-                versionName "1.0"
-                ndk { abiFilters "armeabi", "armeabi-v7a", "x86" }
-            }
-
-            lintOptions { abortOnError false }
-            dexOptions { javaMaxHeapSize "4g"; preDexLibraries = false }
-
-            buildTypes {
-                release {
-                    minifyEnabled false
-                    proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        cat > init.gradle <<EOF
+        allprojects {
+            buildscript {
+                repositories {
+                    maven { url 'https://maven.aliyun.com/repository/google' }
+                    maven { url 'https://maven.aliyun.com/repository/public' }
+                    maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+                    maven { url "https://jitpack.io" }
                 }
-                debug { println 'build - debug' }
             }
-            
-            flavorDimensions "channel"
-            productFlavors {
-                beta { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE:"beta"] }
-                xiaomi { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE:"xiaomi"] }
-                m360 { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE:"m360"] }
-                wandoujia { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE: "wandoujia"] }
-                fir { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE: "fir"] }
-                umeng { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE: "umeng"] }
-                play { dimension "channel"; manifestPlaceholders = [UMENG_CHANNEL_VALUE: "play"] }
+            repositories {
+                maven { url 'https://maven.aliyun.com/repository/google' }
+                maven { url 'https://maven.aliyun.com/repository/public' }
+                maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+                maven { url "https://jitpack.io" }
             }
-        }
-
-        dependencies {
-            implementation fileTree(dir: 'libs', include: ['*.jar'])
-            testImplementation 'junit:junit:4.12'
-            implementation project(':ijkplayer-java')
-
-            // Support Libraries
-            implementation 'com.android.support:appcompat-v7:28.0.0'
-            implementation 'com.android.support:recyclerview-v7:28.0.0'
-            implementation 'com.android.support:design:28.0.0'
-            implementation 'com.android.support:support-v4:28.0.0'
-            implementation 'com.android.support:cardview-v7:28.0.0'
-            implementation 'com.android.support:preference-v7:28.0.0'
-            implementation 'com.takisoft.fix:preference-v7:28.0.0.0'
-            implementation 'com.github.clans:fab:1.6.4'
-            
-            // Retrofit & Rx
-            implementation 'com.squareup.retrofit:retrofit:2.0.0-beta2'
-            implementation 'com.squareup.retrofit:converter-gson:2.0.0-beta2'
-            implementation 'com.squareup.retrofit:adapter-rxjava:2.0.0-beta2'
-            implementation 'io.reactivex:rxandroid:1.2.0'
-            implementation 'io.reactivex:rxjava:1.1.5'
-
-            // UI
-            implementation 'com.eightbitlab:blurview:1.0.2'
-            implementation 'com.bm.photoview:library:1.4.0'
-            implementation 'me.relex:photodraweeview:1.1.2'
-            implementation 'com.squareup.picasso:picasso:2.5.2'
-            implementation 'com.facebook.fresco:fresco:0.11.0'
-            implementation 'com.umeng.analytics:analytics:latest.integration'
-
-            // Butterknife
-            implementation 'com.jakewharton:butterknife:8.8.1'
-            annotationProcessor 'com.jakewharton:butterknife-compiler:8.8.1'
         }
         EOF
-
-    # 7. 源代码兼容性修复
-    - name: Fix Java Source Code
-      run: |
-        find . -name "*.java" -exec sed -i 's/canvas.save(Canvas.MATRIX_SAVE_FLAG)/canvas.save()/g' {} +
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    # 4. 构建 (指定 init 脚本)
     - name: Build APK
-      run: ./gradlew assembleDebug --stacktrace
+      run: ./gradlew assembleDebug --init-script init.gradle --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
